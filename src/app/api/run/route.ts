@@ -28,48 +28,71 @@ archive.finalize();
 
 
 export async function POST(req: NextRequest) {
-const { jobId, spec } = await req.json();
-const parsed = SyntheaSpecSchema.safeParse(spec);
-if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+	try {
+		const { jobId, spec } = await req.json();
+		const parsed = SyntheaSpecSchema.safeParse(spec);
+		if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
 
 
-const base = `/tmp/synthea/${jobId || 'nojid'}`;
-const csvDir = path.join(base, 'csv'); // Synthea will create this
-ensureDir(base);
+		const base = `/tmp/synthea/${jobId || 'nojid'}`;
+		const csvDir = path.join(base, 'csv'); // Synthea will create this
+		ensureDir(base);
 
 
-const args = buildSyntheaArgs(parsed.data, base);
-// Ensure SYNTHEA_DIR is configured; return JSON error if missing so client gets JSON
-if (!process.env.SYNTHEA_DIR) {
-	return NextResponse.json({ error: 'Server misconfiguration: SYNTHEA_DIR env var is not set' }, { status: 500 });
-}
-const cmd = getRunScript();
-const cwd = process.env.SYNTHEA_DIR!;
+		const args = buildSyntheaArgs(parsed.data, base);
+		// Ensure SYNTHEA_DIR is configured; return JSON error if missing so client gets JSON
+		if (!process.env.SYNTHEA_DIR) {
+			return NextResponse.json({ error: 'Server misconfiguration: SYNTHEA_DIR env var is not set' }, { status: 500 });
+		}
+		const cmd = getRunScript();
+		const cwd = process.env.SYNTHEA_DIR!;
+
+		// Run Synthea (give it a generous but finite timeout) and capture output/errors
+		let stdout = '';
+		let stderr = '';
+		try {
+			const result = await execFileAsync(cmd, args, { cwd, timeout: 1000 * 60 * 3, maxBuffer: 1024 * 1024 * 20 });
+			stdout = result.stdout ?? '';
+			stderr = result.stderr ?? '';
+		} catch (err: any) {
+			// execFile throws on non-zero exit / timeout. Capture available output and return a JSON error.
+			stdout = err.stdout ?? '';
+			stderr = err.stderr ?? '';
+			console.error('Synthea execution failed:', err);
+			return NextResponse.json(
+				{
+					error: 'Synthea execution failed',
+					details: err?.message ?? String(err),
+					stdoutTail: (stdout || '').slice(-2000),
+					stderrTail: (stderr || '').slice(-2000),
+				},
+				{ status: 500 }
+			);
+		}
+
+		// Collect CSVs
+		const files = fs.existsSync(csvDir)
+			? fs.readdirSync(csvDir).filter(f => f.endsWith('.csv')).map(f => path.join(csvDir, f))
+			: [];
 
 
-// Run Synthea (give it a generous but finite timeout)
-const { stdout, stderr } = await execFileAsync(cmd, args, { cwd, timeout: 1000 * 60 * 3, maxBuffer: 1024 * 1024 * 20 });
+		if (files.length === 0) {
+			return NextResponse.json({ error: 'No CSV files found. Ensure exporter.csv.export=true.', stdoutTail: stdout?.slice(-2000) ?? '', stderrTail: stderr?.slice(-2000) ?? '' }, { status: 500 });
+		}
 
 
-// Collect CSVs
-const files = fs.existsSync(csvDir)
-? fs.readdirSync(csvDir).filter(f => f.endsWith('.csv')).map(f => path.join(csvDir, f))
-: [];
+		const zipPath = path.join(base, 'synthea_csv.zip');
+		await zipDir(csvDir, zipPath);
 
 
-if (files.length === 0) {
-return NextResponse.json({ error: 'No CSV files found. Ensure exporter.csv.export=true.' }, { status: 500 });
-}
-
-
-const zipPath = path.join(base, 'synthea_csv.zip');
-await zipDir(csvDir, zipPath);
-
-
-return NextResponse.json({
-downloadUrl: `/api/download?job=${encodeURIComponent(jobId || 'nojid')}`,
-files: files.map(f => path.basename(f)),
-stdoutTail: stdout?.slice(-2000) ?? '',
-stderrTail: stderr?.slice(-2000) ?? '',
-});
+		return NextResponse.json({
+			downloadUrl: `/api/download?job=${encodeURIComponent(jobId || 'nojid')}`,
+			files: files.map(f => path.basename(f)),
+			stdoutTail: stdout?.slice(-2000) ?? '',
+			stderrTail: stderr?.slice(-2000) ?? '',
+		});
+	} catch (err: any) {
+		console.error('Unhandled /api/run error:', err);
+		return NextResponse.json({ error: err?.message ?? String(err), stack: err?.stack }, { status: 500 });
+	}
 }
