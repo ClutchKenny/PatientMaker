@@ -12,16 +12,20 @@ export function sanitizeLocation(input?: string | null): string | undefined {
 export function buildSyntheaArgs(spec: SyntheaSpec, baseDir: string): string[] {
   const args: string[] = [];
 
-  if (spec.seed) args.push("-s", String(spec.seed));
+  // seed can be 0; use != null instead of truthy check
+  if (spec.seed != null) args.push("-s", String(spec.seed));
   if (spec.population) args.push("-p", String(spec.population));
   if (spec.gender && spec.gender !== "Any") args.push("-g", spec.gender);
   if (spec.age) args.push("-a", `${spec.age.min}-${spec.age.max}`);
 
   // Ensure CSV export + set output base dir (Synthea will create baseDir/csv)
+  // (Optional) make sure dir exists if this is ever used outside /api/run
+  try { fs.mkdirSync(baseDir, { recursive: true }); } catch {}
+
   args.push("--exporter.csv.export=true");
   args.push(`--exporter.baseDirectory=${path.resolve(baseDir)}`);
 
-  // State + city must be the LAST args per run_synthea usage
+  // Location: run_synthea expects [state [city]] at the end
   const state = sanitizeLocation(spec.state);
   const city = sanitizeLocation(spec.city);
   if (state) args.push(state);
@@ -31,18 +35,12 @@ export function buildSyntheaArgs(spec: SyntheaSpec, baseDir: string): string[] {
 }
 
 /**
- * Resolve the executable we will call:
- * 1) SYNTHEA_RUN_SCRIPT (absolute path) if provided and exists
- * 2) repo wrapper at <repo-root>/run-synthea.sh (or .bat on Windows)
- * 3) run_synthea inside SYNTHEA_DIR/SYNTHEA_PATH
- * Throws with a clear message if nothing is found.
+ * Resolve the executable to call, with sensible fallbacks.
  */
 export function getRunScript(): string {
-  // 1) explicit override
   const override = process.env.SYNTHEA_RUN_SCRIPT;
   if (override && fs.existsSync(override)) return override;
 
-  // 2) repo wrapper
   const repoRoot = process.cwd();
   const wrapper =
     process.platform === "win32"
@@ -50,7 +48,6 @@ export function getRunScript(): string {
       : path.join(repoRoot, "run-synthea.sh");
   if (fs.existsSync(wrapper)) return wrapper;
 
-  // 3) direct script in Synthea repo
   const base = process.env.SYNTHEA_DIR || process.env.SYNTHEA_PATH;
   if (base) {
     const file = process.platform === "win32" ? "run_synthea.bat" : "run_synthea";
