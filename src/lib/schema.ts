@@ -16,4 +16,10 @@ notes: z.string().nullish(), // freeform explanation the model can add
 });
 
 
-export type SyntheaSpec = z.infer<typeof SyntheaSpecSchema>;
+export const MultiRunSchema = z.object({
+  runs: z.array(SyntheaSpecSchema).min(1),
+  bash: z.string(),                       // a ready-to-run bash script
+  notes: z.string().optional(),           // optional tips/warnings
+});
+
+export type MultiRun = z.infer<typeof MultiRunSchema>;

@@ -184,12 +184,20 @@ const COMPONENTS = {
   hr: withClass("hr", "border-foreground/20"),
 }
 
-function withClass(Tag: keyof JSX.IntrinsicElements, classes: string) {
-  const Component = ({ node, ...props }: any) => (
-    <Tag className={classes} {...props} />
-  )
-  Component.displayName = Tag
+function withClass<T extends React.ElementType>(Tag: T, classes: string) {
+  type Props = React.ComponentPropsWithoutRef<T> & { node?: any }
+
+  const Component: React.FC<Props> = ({ node, className, ...props }) =>
+    React.createElement(Tag, {
+      ...(props as Props),
+      className: typeof className === "string" ? `${classes} ${className}` : classes,
+    })
+
+  Component.displayName =
+    typeof Tag === "string" ? Tag : (Tag as any).displayName ?? "Component"
+
   return Component
 }
+
 
 export default MarkdownRenderer
