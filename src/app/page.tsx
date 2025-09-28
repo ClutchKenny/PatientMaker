@@ -168,7 +168,7 @@ export default function Page() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black text-white flex">
+    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-gray-900 to-black text-white flex">
       {/* Sidebar */}
       <div className={`${sidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 overflow-hidden border-r border-gray-700/50 bg-gray-900/50 backdrop-blur-sm flex-shrink-0`}>
         <div className="h-full flex flex-col">
@@ -286,9 +286,9 @@ export default function Page() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col ">
         {/* Header */}
-        <header className="border-b border-gray-700/50 backdrop-blur-sm bg-gray-900/50">
+        <header className="border-b border-purple-700/50 backdrop-blur-sm bg-gray-900/50">
           <div className="max-w-4xl mx-auto px-6 py-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -303,7 +303,7 @@ export default function Page() {
                 <div className="w-8 h-8 bg-gradient-to-r from-emerald-400 to-cyan-400 rounded-lg flex items-center justify-center">
                   <Sparkles className="w-5 h-5 text-gray-900" />
                 </div>
-                <h1 className="text-xl font-semibold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
+                <h1 className="text-xl font-semibold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent flex">
                   Synthease
                 </h1>
               </div>
