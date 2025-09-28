@@ -2,8 +2,30 @@
 import { useState } from 'react';
 import { Send, Download, Code, Users, Sparkles, Zap, FileText, Save, Trash2, Menu, X, Edit2, Check, Database, UserCheck } from 'lucide-react';
 
-type PlanResp = { jobId: string; spec: any; commandPreview: string };
-type RunResp = { downloadUrl: string; files: string[]; stdoutTail: string; stderrTail: string };
+/** ===== Updated types for Option B (multi-cohort aware) ===== */
+type PlanResp = {
+  jobId: string;
+  runsCount: number;
+  runs: any[]; // optionally import your SpecWithLabelT type here
+  commands: Array<{ cohort: string; outDir: string; command: string }>;
+  bash: string;
+  notes?: string;
+};
+
+type RunResp = {
+  ok: boolean;
+  jobId: string;
+  runsCount: number;
+  cohorts: Array<{
+    cohort: string;
+    files: string[];
+    stdoutTail: string;
+    stderrTail: string;
+    zip?: string;     // per-cohort zip URL
+  }>;
+  bundleUrl?: string; // all-cohorts zip URL (optional)
+};
+
 type SplitResp = {
   outputDir: string;
   patientCount: number;
@@ -48,7 +70,7 @@ export default function Page() {
         body: JSON.stringify({ prompt }),
       });
       if (!r.ok) throw new Error(`Plan API error ${r.status}: ${await r.text()}`);
-      const j = await r.json();
+      const j = (await r.json()) as PlanResp;
       setPlan(j);
     } catch (err: any) {
       setError(err?.message || String(err));
@@ -64,13 +86,18 @@ export default function Page() {
     setError(null);
     setSplitRes(null);
     try {
+      const body =
+        plan.runsCount > 1
+          ? { jobId: plan.jobId, runs: plan.runs }        // multi-cohort
+          : { jobId: plan.jobId, spec: plan.runs[0] };    // single cohort
+
       const r = await fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: plan.jobId, spec: plan.spec }),
+        body: JSON.stringify(body),
       });
       if (!r.ok) throw new Error(`Run API error ${r.status}: ${await r.text()}`);
-      const j = await r.json();
+      const j = (await r.json()) as RunResp;
       setRunRes(j);
     } catch (err: any) {
       setError(err?.message || String(err));
@@ -102,25 +129,34 @@ export default function Page() {
     }
   }
 
+  /** Save Component CSVs (supports single or multi-cohort) */
   function handleSaveComponentData() {
     if (!runRes) return;
-    
+
+    const isMulti = runRes.runsCount > 1;
+    const nameBase = isMulti ? 'All Cohorts' : 'Component CSVs';
+    const filesPreview = isMulti
+      ? runRes.cohorts.flatMap(c => c.files).slice(0, 10)
+      : (runRes.cohorts[0]?.files ?? []);
+
     const newFile: SavedFile = {
       id: Date.now().toString(),
-      name: `Component CSVs ${savedFiles.filter(f => f.type === 'component').length + 1}`,
-      downloadUrl: runRes.downloadUrl,
-      files: runRes.files,
+      name: `${nameBase} ${savedFiles.filter(f => f.type === 'component').length + 1}`,
+      downloadUrl: isMulti
+        ? (runRes.bundleUrl ?? runRes.cohorts[0]?.zip ?? '#')
+        : (runRes.cohorts[0]?.zip ?? '#'),
+      files: filesPreview,
       timestamp: new Date(),
       prompt: prompt.slice(0, 100) + (prompt.length > 100 ? '...' : ''),
       type: 'component'
     };
-    
+
     setSavedFiles(prev => [newFile, ...prev]);
   }
 
   function handleSavePatientData() {
     if (!splitRes || !plan) return;
-    
+
     const newFile: SavedFile = {
       id: Date.now().toString(),
       name: `Patient Data ${savedFiles.filter(f => f.type === 'patient').length + 1}`,
@@ -132,7 +168,7 @@ export default function Page() {
       splitRes: splitRes,
       jobId: plan.jobId
     };
-    
+
     setSavedFiles(prev => [newFile, ...prev]);
   }
 
@@ -146,7 +182,7 @@ export default function Page() {
   }
 
   function saveFileName(fileId: string) {
-    setSavedFiles(prev => prev.map(f => 
+    setSavedFiles(prev => prev.map(f =>
       f.id === fileId ? { ...f, name: editingName } : f
     ));
     setEditingFileId(null);
@@ -159,8 +195,8 @@ export default function Page() {
   }
 
   function formatTimestamp(date: Date) {
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
@@ -175,7 +211,7 @@ export default function Page() {
           <div className="p-6 border-b border-gray-700/50">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">Saved Datasets</h2>
-              <button 
+              <button
                 onClick={() => setSidebarOpen(false)}
                 className="p-1 hover:bg-gray-800/50 rounded-lg transition-colors lg:hidden"
               >
@@ -184,7 +220,7 @@ export default function Page() {
             </div>
             <p className="text-sm text-gray-400">Generated patient datasets</p>
           </div>
-          
+
           <div className="flex-1 overflow-y-auto p-4">
             {savedFiles.length === 0 ? (
               <div className="text-center py-12">
@@ -199,9 +235,9 @@ export default function Page() {
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center gap-2 flex-1 min-w-0">
                         <div className={`p-1 rounded ${file.type === 'patient' ? 'bg-emerald-500/20' : 'bg-blue-500/20'}`}>
-                          {file.type === 'patient' ? 
-                            <UserCheck className="w-3 h-3 text-emerald-400" /> : 
-                            <Database className="w-3 h-3 text-blue-400" />
+                          {file.type === 'patient'
+                            ? <UserCheck className="w-3 h-3 text-emerald-400" />
+                            : <Database className="w-3 h-3 text-blue-400" />
                           }
                         </div>
                         {editingFileId === file.id ? (
@@ -241,9 +277,9 @@ export default function Page() {
                         <Trash2 className="w-3 h-3 text-red-400" />
                       </button>
                     </div>
-                    
+
                     <p className="text-xs text-gray-400 mb-3 line-clamp-2">{file.prompt}</p>
-                    
+
                     <div className="space-y-2 mb-3">
                       {file.type === 'patient' && file.splitRes ? (
                         <div className="text-xs text-gray-500">
@@ -264,7 +300,7 @@ export default function Page() {
                         </>
                       )}
                     </div>
-                    
+
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-gray-500">
                         {formatTimestamp(file.timestamp)}
@@ -293,7 +329,7 @@ export default function Page() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 {!sidebarOpen && (
-                  <button 
+                  <button
                     onClick={() => setSidebarOpen(true)}
                     className="p-2 hover:bg-gray-800/50 rounded-lg transition-colors"
                   >
@@ -307,10 +343,10 @@ export default function Page() {
                   Synthease
                 </h1>
               </div>
-              
+
               <div className="flex items-center gap-3">
                 {runRes && (
-                  <button 
+                  <button
                     onClick={handleSaveComponentData}
                     className="flex items-center gap-2 bg-gradient-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/30 hover:border-blue-500/50 text-blue-300 px-4 py-2 rounded-xl transition-all duration-200 hover:scale-105"
                   >
@@ -319,7 +355,7 @@ export default function Page() {
                   </button>
                 )}
                 {splitRes && (
-                  <button 
+                  <button
                     onClick={handleSavePatientData}
                     className="flex items-center gap-2 bg-gradient-to-r from-emerald-500/20 to-cyan-500/20 border border-emerald-500/30 hover:border-emerald-500/50 text-emerald-300 px-4 py-2 rounded-xl transition-all duration-200 hover:scale-105"
                   >
@@ -361,13 +397,13 @@ export default function Page() {
           {/* Input Section */}
           <div className="mb-8">
             <div className="relative">
-              <textarea 
-                className="w-full bg-gray-800/50 border border-gray-700/50 rounded-2xl p-6 pr-16 text-white placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 backdrop-blur-sm min-h-[120px] shadow-xl" 
-                value={prompt} 
+              <textarea
+                className="w-full bg-gray-800/50 border border-gray-700/50 rounded-2xl p-6 pr-16 text-white placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 backdrop-blur-sm min-h-[120px] shadow-xl"
+                value={prompt}
                 onChange={e => setPrompt(e.target.value)}
                 placeholder="Ex: Generate 10 male patients ages 15-25 from Jacksonville, Florida"
               />
-              <button 
+              <button
                 onClick={handlePlan}
                 disabled={busy || !prompt.trim()}
                 className="absolute bottom-4 right-4 p-3 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600 disabled:from-gray-600 disabled:to-gray-700 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 disabled:scale-100 disabled:cursor-not-allowed group"
@@ -379,7 +415,7 @@ export default function Page() {
                 )}
               </button>
             </div>
-            
+
             {!plan && (
               <div className="mt-4 flex items-start gap-3 text-gray-400 text-sm">
                 <div className="w-5 h-5 bg-blue-500/20 rounded-full flex items-center justify-center mt-0.5 flex-shrink-0">
@@ -400,27 +436,53 @@ export default function Page() {
                   </div>
                   <h3 className="text-lg font-semibold text-white">Execution Plan</h3>
                 </div>
-                
+
                 <div className="space-y-4">
                   <div>
-                    <div className="text-sm text-gray-400 mb-2">Configuration Spec</div>
+                    <div className="text-sm text-gray-400 mb-2">
+                      {plan.runsCount > 1 ? 'Configuration Specs (all cohorts)' : 'Configuration Spec'}
+                    </div>
                     <pre className="bg-gray-900/50 border border-gray-700/50 rounded-lg p-4 text-xs text-gray-300 overflow-auto font-mono">
-                      {JSON.stringify(plan.spec, null, 2)}
+                      {plan.runsCount > 1
+                        ? JSON.stringify(plan.runs, null, 2)
+                        : JSON.stringify(plan.runs[0], null, 2)}
                     </pre>
                   </div>
-                  
+
                   <div>
-                    <div className="text-sm text-gray-400 mb-2">Command Preview</div>
-                    <code className="block bg-gray-900/50 border border-gray-700/50 rounded-lg p-4 text-xs text-emerald-300 overflow-auto font-mono">
-                      {plan.commandPreview}
-                    </code>
+                    <div className="text-sm text-gray-400 mb-2">
+                      {plan.runsCount > 1 ? 'Command Previews (all cohorts)' : 'Command Preview'}
+                    </div>
+                    {plan.runsCount > 1 ? (
+                      <div className="space-y-2">
+                        {plan.commands.map((c) => (
+                          <div key={c.cohort}>
+                            <div className="text-xs text-gray-400 mb-1 font-medium">{c.cohort}</div>
+                            <code className="block bg-gray-900/50 border border-gray-700/50 rounded-lg p-3 text-xs text-emerald-300 overflow-auto font-mono">
+                              {c.command}
+                            </code>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <code className="block bg-gray-900/50 border border-gray-700/50 rounded-lg p-4 text-xs text-emerald-300 overflow-auto font-mono">
+                        {plan.commands[0]?.command}
+                      </code>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="text-sm text-gray-400 mb-2">Execution Plan (bash)</div>
+                    <pre className="bg-gray-900/50 border border-gray-700/50 rounded-lg p-4 text-xs text-gray-300 overflow-auto font-mono">
+                      {plan.bash}
+                    </pre>
                   </div>
                 </div>
               </div>
-              
+
               <div className="p-6">
                 <div className="flex gap-3">
-                  <button 
+                  <button
                     onClick={handleRun}
                     disabled={busy}
                     className="flex-1 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600 disabled:from-gray-600 disabled:to-gray-700 text-white font-medium py-4 px-6 rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-[1.02] disabled:scale-100 disabled:cursor-not-allowed flex items-center justify-center gap-3"
@@ -437,8 +499,8 @@ export default function Page() {
                       </>
                     )}
                   </button>
-                  
-                  <button 
+
+                  <button
                     onClick={handleSplit}
                     disabled={!runRes || splitBusy}
                     title={!runRes ? 'Generate Component CSVs first' : ''}
@@ -471,52 +533,73 @@ export default function Page() {
                   </div>
                   <h3 className="text-lg font-semibold text-white">Component CSV Output</h3>
                 </div>
-                
+
                 <div className="space-y-6">
-                  <div>
-                    <a 
-                      href={runRes.downloadUrl}
-                      className="inline-flex items-center gap-3 bg-white text-gray-900 font-medium py-3 px-6 rounded-xl hover:bg-gray-100 transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105"
-                    >
-                      <Download className="w-5 h-5" />
-                      Download Component Data (ZIP)
-                    </a>
-                  </div>
-                  
-                  {runRes.files && runRes.files.length > 0 && (
+                  {/* Download all (bundle) if available */}
+                  {runRes.bundleUrl && (
                     <div>
-                      <div className="text-sm text-gray-400 mb-3">Generated Files</div>
-                      <div className="grid gap-2">
-                        {runRes.files.map(file => (
-                          <div key={file} className="bg-gray-800/50 border border-gray-700/50 rounded-lg p-3 text-sm text-gray-300 font-mono">
-                            {file}
-                          </div>
-                        ))}
-                      </div>
+                      <a
+                        href={runRes.bundleUrl}
+                        className="inline-flex items-center gap-3 bg-white text-gray-900 font-medium py-3 px-6 rounded-xl hover:bg-gray-100 transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105"
+                      >
+                        <Download className="w-5 h-5" />
+                        Download All Cohorts (ZIP)
+                      </a>
                     </div>
                   )}
-                  
-                  <details className="group">
-                    <summary className="cursor-pointer text-gray-300 hover:text-white transition-colors select-none py-2 px-3 rounded-lg hover:bg-gray-800/50">
-                      <span className="font-medium">View Execution Logs</span>
-                      <span className="text-gray-500 ml-2 group-open:hidden">▶</span>
-                      <span className="text-gray-500 ml-2 group-open:inline hidden">▼</span>
-                    </summary>
-                    <div className="mt-4 space-y-3">
-                      <div>
-                        <div className="text-xs text-gray-400 mb-2 font-medium">STDOUT</div>
-                        <pre className="bg-gray-900/50 border border-gray-700/50 rounded-lg p-4 text-xs text-gray-300 overflow-auto font-mono max-h-48">
-                          {runRes.stdoutTail}
-                        </pre>
+
+                  {/* Per-cohort outputs */}
+                  <div className="grid gap-4">
+                    {runRes.cohorts.map((c) => (
+                      <div key={c.cohort} className="bg-gray-800/50 border border-gray-700/50 rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="font-medium text-white">{c.cohort}</div>
+                          {c.zip && (
+                            <a
+                              href={c.zip}
+                              className="inline-flex items-center gap-2 text-xs bg-white text-gray-900 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+                            >
+                              <Download className="w-3 h-3" />
+                              Download ZIP
+                            </a>
+                          )}
+                        </div>
+
+                        {!!c.files?.length && (
+                          <>
+                            <div className="text-sm text-gray-400 mb-2">Generated Files</div>
+                            <div className="grid gap-2">
+                              {c.files.map((f) => (
+                                <div key={f} className="bg-gray-900/50 border border-gray-700/50 rounded p-2 text-xs text-gray-300 font-mono">
+                                  {f}
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
+
+                        <details className="group mt-3">
+                          <summary className="cursor-pointer text-gray-300 hover:text-white transition-colors select-none py-1 px-2 rounded hover:bg-gray-900/40">
+                            <span className="font-medium text-xs">View Execution Logs</span>
+                          </summary>
+                          <div className="mt-3 grid gap-3">
+                            <div>
+                              <div className="text-[11px] text-gray-400 mb-1 font-medium">STDOUT</div>
+                              <pre className="bg-gray-900/50 border border-gray-700/50 rounded p-2 text-[11px] text-gray-300 overflow-auto font-mono max-h-40">
+                                {c.stdoutTail}
+                              </pre>
+                            </div>
+                            <div>
+                              <div className="text-[11px] text-gray-400 mb-1 font-medium">STDERR</div>
+                              <pre className="bg-gray-900/50 border border-gray-700/50 rounded p-2 text-[11px] text-gray-300 overflow-auto font-mono max-h-40">
+                                {c.stderrTail}
+                              </pre>
+                            </div>
+                          </div>
+                        </details>
                       </div>
-                      <div>
-                        <div className="text-xs text-gray-400 mb-2 font-medium">STDERR</div>
-                        <pre className="bg-gray-900/50 border border-gray-700/50 rounded-lg p-4 text-xs text-gray-300 overflow-auto font-mono max-h-48">
-                          {runRes.stderrTail}
-                        </pre>
-                      </div>
-                    </div>
-                  </details>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -532,7 +615,7 @@ export default function Page() {
                   </div>
                   <h3 className="text-lg font-semibold text-white">Patient-centric CSVs</h3>
                 </div>
-                
+
                 <div className="space-y-6">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="bg-gray-800/50 border border-gray-700/50 rounded-lg p-4">
@@ -544,7 +627,7 @@ export default function Page() {
                       <div className="text-2xl font-bold text-emerald-300">{splitRes.patientCount}</div>
                     </div>
                   </div>
-                  
+
                   <div>
                     {plan?.jobId && (
                       <a
@@ -556,7 +639,7 @@ export default function Page() {
                       </a>
                     )}
                   </div>
-                  
+
                   {splitRes.patientIds && splitRes.patientIds.length > 0 && plan?.jobId && (
                     <div>
                       <div className="text-sm text-gray-400 mb-3">Individual Patient Downloads (First 20)</div>
